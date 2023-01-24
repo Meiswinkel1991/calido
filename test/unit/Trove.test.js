@@ -10,7 +10,8 @@ const { network, ethers } = require("hardhat");
 
 describe("Trove Unit test", () => {
   async function deployVaultFixure() {
-    const [owner, otherAccount] = await ethers.getSigners();
+    const [owner, otherAccount, mockManagerContract] =
+      await ethers.getSigners();
 
     const chainId = network.config.chainId;
 
@@ -53,14 +54,93 @@ describe("Trove Unit test", () => {
       troveManager
     );
 
-    return { trove, owner, otherAccount, troveManagerContract, cdEther };
+    await trove.setManagerContract(mockManagerContract.address);
+
+    return {
+      trove,
+      owner,
+      otherAccount,
+      troveManagerContract,
+      cdEther,
+      mockManagerContract,
+    };
   }
 
-  describe("#depositETH", () => {
-    it("should successfull deposit Ether to the trove", async () => {
-      const { trove, otherAccount, cdEther } = await loadFixture(
+  describe("#activateVault", () => {
+    it("should succesfully create a new vault on vesta protocol", async () => {
+      const { trove, otherAccount, troveManagerContract } = await loadFixture(
         deployVaultFixure
       );
+
+      const depositAmount = ethers.utils.parseEther("1");
+      const tx = {
+        to: trove.address,
+        value: depositAmount,
+      };
+      await otherAccount.sendTransaction(tx);
+
+      await trove.activateVault();
+
+      const troveDetails = await troveManagerContract.getEntireDebtAndColl(
+        ethers.constants.AddressZero,
+        trove.address
+      );
+
+      assert(troveDetails[1].eq(depositAmount));
+    });
+
+    it("should fail if vault is already activated", async () => {
+      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+
+      const depositAmount = ethers.utils.parseEther("1");
+      const tx = {
+        to: trove.address,
+        value: depositAmount,
+      };
+      await otherAccount.sendTransaction(tx);
+
+      await trove.activateVault();
+
+      await expect(trove.activateVault()).to.revertedWithCustomError(
+        trove,
+        "Trove__TroveIsActive"
+      );
+    });
+
+    it("should fail if the vault contract have no balance", async () => {
+      const { trove } = await loadFixture(deployVaultFixure);
+
+      await expect(trove.activateVault()).to.revertedWithCustomError(
+        trove,
+        "Trove__NoEtherBalance"
+      );
+    });
+  });
+
+  describe("#depositETH", () => {
+    it("should successfull deposit Ether to the trove and change the trove", async () => {
+      const {
+        trove,
+        otherAccount,
+        cdEther,
+        mockManagerContract,
+        troveManagerContract,
+      } = await loadFixture(deployVaultFixure);
+
+      const depositAmount = ethers.utils.parseEther("1");
+      const tx = {
+        to: trove.address,
+        value: depositAmount,
+      };
+      await otherAccount.sendTransaction(tx);
+
+      await trove.activateVault();
+
+      const troveDetailsBefore =
+        await troveManagerContract.getEntireDebtAndColl(
+          ethers.constants.AddressZero,
+          trove.address
+        );
 
       await trove
         .connect(otherAccount)
@@ -68,61 +148,20 @@ describe("Trove Unit test", () => {
 
       // account should have 10 cdEther
 
-      const _balance = await cdEther.balanceOf(otherAccount.address);
-
-      assert(_balance.eq(ethers.utils.parseEther("10")));
-    });
-  });
-
-  describe("#addCollateral", () => {
-    it("should open a new trove if no trove is active", async () => {
-      const { trove, otherAccount, troveManagerContract } = await loadFixture(
-        deployVaultFixure
-      );
-
-      const tx = {
-        to: trove.address,
-        value: ethers.utils.parseEther("1"),
-      };
-
-      await otherAccount.sendTransaction(tx);
-
-      await trove.addCollateral(ethers.utils.parseEther("1.0"));
-
-      const troveStatus = await troveManagerContract.getTroveStatus(
+      const troveDetailsAfter = await troveManagerContract.getEntireDebtAndColl(
         ethers.constants.AddressZero,
         trove.address
       );
 
-      assert(troveStatus.eq(1));
+      assert(
+        troveDetailsAfter.coll
+          .sub(ethers.utils.parseEther("10"))
+          .eq(troveDetailsBefore.coll)
+      );
 
       const currentICR = await trove.getCurrentICRVault();
 
       assert(currentICR.eq(ethers.utils.parseEther("1.2")));
-    });
-
-    it("should adjust the ICR on an active trove", async () => {
-      const { trove, otherAccount, troveManagerContract } = await loadFixture(
-        deployVaultFixure
-      );
-
-      const tx = {
-        to: trove.address,
-        value: ethers.utils.parseEther("1"),
-      };
-
-      await otherAccount.sendTransaction(tx);
-
-      await trove.addCollateral(ethers.utils.parseEther("0.5"));
-
-      await trove.addCollateral(ethers.utils.parseEther("0.2"));
-
-      const troveInfo = await troveManagerContract.getEntireDebtAndColl(
-        ethers.constants.AddressZero,
-        trove.address
-      );
-
-      assert(troveInfo.coll.eq(ethers.utils.parseEther("0.7")));
     });
   });
 });
