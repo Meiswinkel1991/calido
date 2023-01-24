@@ -11,8 +11,6 @@ import "./interfaces/vesta-protocol/IPriceFeed.sol";
 import "./interfaces/vesta-protocol/ISortedTroves.sol";
 import "./interfaces/token/IERC20.sol";
 
-import "./token/ICalidoEther.sol";
-
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 contract Trove {
@@ -29,8 +27,6 @@ contract Trove {
 
     /*====== State Variables ====== */
 
-    uint256 totalStakedETH;
-
     uint256 targetICR;
     uint256 deviationCR;
 
@@ -45,7 +41,6 @@ contract Trove {
     address sortedTroves;
 
     IERC20 VSTStableToken;
-    ICalidoEther calidoEther;
 
     /*====== Modifier ======*/
     modifier nonZeroAmount() {
@@ -97,14 +92,9 @@ contract Trove {
     event TroveActivated(uint256 coll);
     event TroveUpdated(uint256 coll, uint256 debt);
 
-    constructor(
-        uint256 _deviationCR,
-        uint256 _targetICR,
-        address _stakingToken
-    ) {
+    constructor(uint256 _deviationCR, uint256 _targetICR) {
         deviationCR = _deviationCR;
         targetICR = _targetICR;
-        calidoEther = ICalidoEther(_stakingToken);
     }
 
     receive() external payable {}
@@ -131,7 +121,7 @@ contract Trove {
     function depositETH() external payable nonZeroAmount activeTrove {
         uint256 _amount = msg.value;
 
-        bool _updateRequired = _checkForRequiredTroveUpdate(_amount, true);
+        _adjustTrove(_amount, true);
     }
 
     function withdrawETH(uint256 _amount) external nonZeroTokenAmount(_amount) {
@@ -144,9 +134,11 @@ contract Trove {
         require(sent);
     }
 
-    function withdrawCollateral(
-        uint256 _amount
-    ) external nonZeroTokenAmount(_amount) {}
+    function adjustTrove() public activeTrove {
+        _adjustTrove(0, true);
+    }
+
+    /*====== Setup Functions ======*/
 
     function setVestaProtocolAddresses(
         address _troveManager,
@@ -173,27 +165,6 @@ contract Trove {
 
     /*====== Internal ======*/
 
-    function _checkForRequiredTroveUpdate(
-        uint256 _deltaColl,
-        bool _increase
-    ) internal returns (bool) {
-        (uint256 _debt, uint256 _coll, , ) = ITroveManager(troveManager)
-            .getEntireDebtAndColl(address(0), address(this));
-
-        uint256 _newColl = _increase
-            ? _coll.add(_deltaColl).add(getAssetBalance())
-            : _coll.sub(_deltaColl).add(getAssetBalance());
-
-        uint256 _expectedICR = IHintHelpers(hintHelpers).computeCR(
-            _newColl,
-            _debt,
-            getAssetPrice()
-        );
-
-        return (_expectedICR < targetICR.sub(deviationCR) ||
-            _expectedICR > targetICR.add(deviationCR));
-    }
-
     function _openNewTrove(uint256 _coll) internal {
         uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
 
@@ -217,22 +188,20 @@ contract Trove {
         );
     }
 
-    function _addCollateralToActiveTrove(
-        uint256 _deltaColl
-    ) internal returns (uint256 _newColl, uint256 _newDebt) {
+    function _adjustTrove(uint256 _deltaColl, bool _increase) internal {
         (uint256 _debt, uint256 _coll, , ) = ITroveManager(troveManager)
             .getEntireDebtAndColl(address(0), address(this));
 
-        _newColl = _coll.add(_deltaColl);
+        uint256 _newColl = _increase
+            ? _coll.add(_deltaColl)
+            : _coll.sub(_deltaColl);
 
         // Add collateral and adjust debt to reach the target price
-        uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
-        uint256 _targetDebt = (_newColl).mul(_price).div(targetICR);
 
-        _newDebt = _targetDebt;
+        uint256 _targetDebt = (_newColl).mul(getAssetPrice()).div(targetICR);
 
         bool _isDebtIncrease = _targetDebt >= _debt ? true : false;
-        uint256 _deltaDebt = _targetDebt >= _debt
+        uint256 _deltaDebt = _isDebtIncrease
             ? _targetDebt.sub(_debt)
             : _debt.sub(_targetDebt);
 
@@ -254,6 +223,8 @@ contract Trove {
             _upperHint,
             _lowerHint
         );
+
+        emit TroveUpdated(_newColl, _targetDebt);
     }
 
     function _calculateHints(
@@ -280,16 +251,16 @@ contract Trove {
         return (_upperHint, _lowerHint);
     }
 
-    function _checkDebtAdjustment(uint256 _colWithdraw) internal view {
-        uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
+    // function _checkDebtAdjustment(uint256 _colWithdraw) internal view {
+    //     uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
 
-        (uint256 _debt, uint256 _coll, , ) = ITroveManager(troveManager)
-            .getEntireDebtAndColl(address(0), address(this));
+    //     (uint256 _debt, uint256 _coll, , ) = ITroveManager(troveManager)
+    //         .getEntireDebtAndColl(address(0), address(this));
 
-        if (_coll < _colWithdraw) {
-            revert Trove__NotEnoughCollateral();
-        }
-    }
+    //     if (_coll < _colWithdraw) {
+    //         revert Trove__NotEnoughCollateral();
+    //     }
+    // }
 
     function _transferStableTokensToManagerContract() internal {
         uint256 _tokenBalance = VSTStableToken.balanceOf(address(this));

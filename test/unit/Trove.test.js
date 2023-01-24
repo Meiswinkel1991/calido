@@ -29,14 +29,9 @@ describe("Trove Unit test", () => {
     const HintHelpers = await ethers.getContractFactory("HintHelpers");
     const hintHelpers = await HintHelpers.deploy(troveManager, sortedTroves);
 
-    const CalidoEther = await ethers.getContractFactory("CalidoEther");
-    const cdEther = await CalidoEther.deploy();
-
     const Trove = await ethers.getContractFactory("Trove");
 
-    const trove = await Trove.deploy(deviationICR, targetICR, cdEther.address);
-
-    await cdEther.transferOwnership(trove.address);
+    const trove = await Trove.deploy(deviationICR, targetICR);
 
     await trove.setVestaProtocolAddresses(
       troveManager,
@@ -61,7 +56,6 @@ describe("Trove Unit test", () => {
       owner,
       otherAccount,
       troveManagerContract,
-      cdEther,
       mockManagerContract,
     };
   }
@@ -119,13 +113,9 @@ describe("Trove Unit test", () => {
 
   describe("#depositETH", () => {
     it("should successfull deposit Ether to the trove and change the trove", async () => {
-      const {
-        trove,
-        otherAccount,
-        cdEther,
-        mockManagerContract,
-        troveManagerContract,
-      } = await loadFixture(deployVaultFixure);
+      const { trove, otherAccount, troveManagerContract } = await loadFixture(
+        deployVaultFixure
+      );
 
       const depositAmount = ethers.utils.parseEther("1");
       const tx = {
@@ -153,6 +143,8 @@ describe("Trove Unit test", () => {
         trove.address
       );
 
+      console.log(troveDetailsAfter);
+
       assert(
         troveDetailsAfter.coll
           .sub(ethers.utils.parseEther("10"))
@@ -162,6 +154,33 @@ describe("Trove Unit test", () => {
       const currentICR = await trove.getCurrentICRVault();
 
       assert(currentICR.eq(ethers.utils.parseEther("1.2")));
+    });
+
+    it("should fail when no ether transfered within transaction", async () => {
+      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+
+      const depositAmount = ethers.utils.parseEther("1");
+      const tx = {
+        to: trove.address,
+        value: depositAmount,
+      };
+      await otherAccount.sendTransaction(tx);
+
+      await trove.activateVault();
+
+      await expect(
+        trove.connect(otherAccount).depositETH()
+      ).to.revertedWithCustomError(trove, "Trove__NonZeroAmount");
+    });
+
+    it("should fail when the trove is not active", async () => {
+      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+
+      await expect(
+        trove
+          .connect(otherAccount)
+          .depositETH({ value: ethers.utils.parseEther("10") })
+      ).to.revertedWithCustomError(trove, "Trove__TroveIsNotActive");
     });
   });
 });
