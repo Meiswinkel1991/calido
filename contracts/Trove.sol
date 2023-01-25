@@ -11,6 +11,8 @@ import "./interfaces/vesta-protocol/IPriceFeed.sol";
 import "./interfaces/vesta-protocol/ISortedTroves.sol";
 import "./interfaces/token/IERC20.sol";
 
+import "./interfaces/protocol/ICalidoManager.sol";
+
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 contract Trove {
@@ -28,7 +30,8 @@ contract Trove {
     /*====== State Variables ====== */
 
     uint256 targetICR;
-    uint256 deviationCR;
+    uint256 normalRange;
+    uint256 emergencyRange;
 
     address calidoManagerContract;
 
@@ -93,7 +96,7 @@ contract Trove {
     event TroveUpdated(uint256 coll, uint256 debt);
 
     constructor(uint256 _deviationCR, uint256 _targetICR) {
-        deviationCR = _deviationCR;
+        normalRange = _deviationCR;
         targetICR = _targetICR;
     }
 
@@ -105,8 +108,8 @@ contract Trove {
      * @dev -activate the vault an initialize a vesta finance vault with an ICR of targetICR
      *
      */
-    function activateVault() external noActiveTrove {
-        uint256 _balanceETH = address(this).balance;
+    function activateVault() external payable noActiveTrove isCalidoManager {
+        uint256 _balanceETH = msg.value;
         if (_balanceETH == 0) {
             revert Trove__NoEtherBalance();
         }
@@ -118,23 +121,29 @@ contract Trove {
         emit TroveActivated(_balanceETH);
     }
 
-    function depositETH() external payable nonZeroAmount activeTrove {
+    function depositETH()
+        external
+        payable
+        nonZeroAmount
+        activeTrove
+        isCalidoManager
+    {
         uint256 _amount = msg.value;
 
         _adjustTrove(_amount, true);
     }
 
-    function withdrawETH(uint256 _amount) external nonZeroTokenAmount(_amount) {
-        if (_amount > address(this).balance) {
-            //TODO: withdraw collateral from vesta vault and adjust trove
-        }
+    function withdrawETH(
+        uint256 _amount
+    ) external nonZeroTokenAmount(_amount) isCalidoManager {
+        _adjustTrove(_amount, false);
 
         (bool sent, ) = msg.sender.call{value: _amount}("");
 
         require(sent);
     }
 
-    function adjustTrove() public activeTrove {
+    function adjustTrove() public activeTrove isCalidoManager {
         _adjustTrove(0, true);
     }
 
@@ -160,15 +169,14 @@ contract Trove {
     }
 
     function setManagerContract(address _manager) external {
+        //TODO: safe this function. Only once should be possible to call this function
         calidoManagerContract = _manager;
     }
 
     /*====== Internal ======*/
 
     function _openNewTrove(uint256 _coll) internal {
-        uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
-
-        uint256 _debt = _coll.mul(_price).div(targetICR);
+        uint256 _debt = _coll.mul(getAssetPrice()).div(targetICR);
 
         (address _upperHint, address _lowerHint) = _calculateHints(
             _coll,
@@ -196,18 +204,35 @@ contract Trove {
             ? _coll.add(_deltaColl)
             : _coll.sub(_deltaColl);
 
-        // Add collateral and adjust debt to reach the target price
+        uint256 _currentICR = _newColl.mul(getAssetPrice()).div(_debt);
+
+        bool _paybackDebt = _currentICR < targetICR.sub(normalRange);
 
         uint256 _targetDebt = (_newColl).mul(getAssetPrice()).div(targetICR);
-
         bool _isDebtIncrease = _targetDebt >= _debt ? true : false;
-        uint256 _deltaDebt = _isDebtIncrease
-            ? _targetDebt.sub(_debt)
-            : _debt.sub(_targetDebt);
+
+        uint256 _deltaDebt;
+
+        if (_paybackDebt) {
+            _deltaDebt = _debt.sub(_targetDebt);
+
+            bool _receive = ICalidoManager(calidoManagerContract)
+                .sendDebtTokensToTrove(_deltaDebt);
+            require(_receive);
+
+            VSTStableToken.approve(borrowerOperations, _deltaDebt);
+        } else {
+            _deltaDebt = _isDebtIncrease ? _targetDebt.sub(_debt) : 0;
+        }
+
+        // Add collateral and adjust debt to reach the target price
+        uint256 _newDebt = _isDebtIncrease
+            ? _debt.add(_deltaDebt)
+            : _debt.sub(_deltaDebt);
 
         (address _upperHint, address _lowerHint) = _calculateHints(
             (_coll.add(_deltaColl)),
-            _targetDebt
+            _newDebt
         );
 
         uint256 _maxBorrowingFee = IVestaParameters(vestaParams)
@@ -224,7 +249,7 @@ contract Trove {
             _lowerHint
         );
 
-        emit TroveUpdated(_newColl, _targetDebt);
+        emit TroveUpdated(_newColl, _newDebt);
     }
 
     function _calculateHints(
@@ -251,17 +276,6 @@ contract Trove {
         return (_upperHint, _lowerHint);
     }
 
-    // function _checkDebtAdjustment(uint256 _colWithdraw) internal view {
-    //     uint256 _price = IPriceFeed(priceFeed).getExternalPrice(address(0));
-
-    //     (uint256 _debt, uint256 _coll, , ) = ITroveManager(troveManager)
-    //         .getEntireDebtAndColl(address(0), address(this));
-
-    //     if (_coll < _colWithdraw) {
-    //         revert Trove__NotEnoughCollateral();
-    //     }
-    // }
-
     function _transferStableTokensToManagerContract() internal {
         uint256 _tokenBalance = VSTStableToken.balanceOf(address(this));
         if (_tokenBalance > 0) {
@@ -270,7 +284,21 @@ contract Trove {
                 _tokenBalance
             );
             require(_sent);
+
+            if (_isContract(calidoManagerContract)) {
+                ICalidoManager(calidoManagerContract).sendTokensFallback();
+            }
         }
+    }
+
+    function _isContract(
+        address _addr
+    ) internal view returns (bool isContract) {
+        uint32 size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return (size > 0);
     }
 
     /*====== Pure View Functions ======*/
@@ -289,8 +317,8 @@ contract Trove {
         return IPriceFeed(priceFeed).getExternalPrice(address(0));
     }
 
-    function getAssetBalance() public view returns (uint256) {
-        console.log(address(this).balance);
-        return address(this).balance;
-    }
+    // function getAssetBalance() public view returns (uint256) {
+    //     console.log(address(this).balance);
+    //     return address(this).balance;
+    // }
 }

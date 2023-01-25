@@ -62,69 +62,64 @@ describe("Trove Unit test", () => {
 
   describe("#activateVault", () => {
     it("should succesfully create a new vault on vesta protocol", async () => {
-      const { trove, otherAccount, troveManagerContract } = await loadFixture(
-        deployVaultFixure
-      );
+      const { trove, troveManagerContract, mockManagerContract } =
+        await loadFixture(deployVaultFixure);
 
       const depositAmount = ethers.utils.parseEther("1");
-      const tx = {
-        to: trove.address,
-        value: depositAmount,
-      };
-      await otherAccount.sendTransaction(tx);
 
-      await trove.activateVault();
+      await trove
+        .connect(mockManagerContract)
+        .activateVault({ value: depositAmount });
 
       const troveDetails = await troveManagerContract.getEntireDebtAndColl(
         ethers.constants.AddressZero,
         trove.address
       );
 
+      console.log(troveDetails);
+
       assert(troveDetails[1].eq(depositAmount));
     });
 
     it("should fail if vault is already activated", async () => {
-      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+      const { trove, mockManagerContract } = await loadFixture(
+        deployVaultFixure
+      );
 
       const depositAmount = ethers.utils.parseEther("1");
-      const tx = {
-        to: trove.address,
-        value: depositAmount,
-      };
-      await otherAccount.sendTransaction(tx);
 
-      await trove.activateVault();
+      await trove
+        .connect(mockManagerContract)
+        .activateVault({ value: depositAmount });
 
-      await expect(trove.activateVault()).to.revertedWithCustomError(
-        trove,
-        "Trove__TroveIsActive"
-      );
+      await expect(
+        trove
+          .connect(mockManagerContract)
+          .activateVault({ value: depositAmount })
+      ).to.revertedWithCustomError(trove, "Trove__TroveIsActive");
     });
 
     it("should fail if the vault contract have no balance", async () => {
-      const { trove } = await loadFixture(deployVaultFixure);
-
-      await expect(trove.activateVault()).to.revertedWithCustomError(
-        trove,
-        "Trove__NoEtherBalance"
+      const { trove, mockManagerContract } = await loadFixture(
+        deployVaultFixure
       );
+
+      await expect(
+        trove.connect(mockManagerContract).activateVault()
+      ).to.revertedWithCustomError(trove, "Trove__NoEtherBalance");
     });
   });
 
   describe("#depositETH", () => {
     it("should successfull deposit Ether to the trove and change the trove", async () => {
-      const { trove, otherAccount, troveManagerContract } = await loadFixture(
-        deployVaultFixure
-      );
+      const { trove, troveManagerContract, mockManagerContract } =
+        await loadFixture(deployVaultFixure);
 
       const depositAmount = ethers.utils.parseEther("1");
-      const tx = {
-        to: trove.address,
-        value: depositAmount,
-      };
-      await otherAccount.sendTransaction(tx);
 
-      await trove.activateVault();
+      await trove
+        .connect(mockManagerContract)
+        .activateVault({ value: depositAmount });
 
       const troveDetailsBefore =
         await troveManagerContract.getEntireDebtAndColl(
@@ -133,7 +128,7 @@ describe("Trove Unit test", () => {
         );
 
       await trove
-        .connect(otherAccount)
+        .connect(mockManagerContract)
         .depositETH({ value: ethers.utils.parseEther("10") });
 
       // account should have 10 cdEther
@@ -157,30 +152,55 @@ describe("Trove Unit test", () => {
     });
 
     it("should fail when no ether transfered within transaction", async () => {
-      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+      const { trove, mockManagerContract } = await loadFixture(
+        deployVaultFixure
+      );
 
       const depositAmount = ethers.utils.parseEther("1");
-      const tx = {
-        to: trove.address,
-        value: depositAmount,
-      };
-      await otherAccount.sendTransaction(tx);
 
-      await trove.activateVault();
+      await trove
+        .connect(mockManagerContract)
+        .activateVault({ value: depositAmount });
 
       await expect(
-        trove.connect(otherAccount).depositETH()
+        trove.connect(mockManagerContract).depositETH()
       ).to.revertedWithCustomError(trove, "Trove__NonZeroAmount");
     });
 
     it("should fail when the trove is not active", async () => {
-      const { trove, otherAccount } = await loadFixture(deployVaultFixure);
+      const { trove, mockManagerContract } = await loadFixture(
+        deployVaultFixure
+      );
 
       await expect(
         trove
-          .connect(otherAccount)
+          .connect(mockManagerContract)
           .depositETH({ value: ethers.utils.parseEther("10") })
       ).to.revertedWithCustomError(trove, "Trove__TroveIsNotActive");
+    });
+  });
+
+  describe("#withdrawETH", () => {
+    it("should successfull withdraw ETH after calling this function", async () => {
+      const { trove, mockManagerContract, troveManagerContract } =
+        await loadFixture(deployVaultFixure);
+
+      const depositAmount = ethers.utils.parseEther("10");
+
+      await trove
+        .connect(mockManagerContract)
+        .activateVault({ value: depositAmount });
+
+      await trove
+        .connect(mockManagerContract)
+        .withdrawETH(ethers.utils.parseEther("0.1"));
+
+      const troveDetails = await troveManagerContract.getEntireDebtAndColl(
+        ethers.constants.AddressZero,
+        trove.address
+      );
+
+      console.log(troveDetails);
     });
   });
 });
