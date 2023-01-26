@@ -238,11 +238,14 @@ contract Trove {
         uint256 _maxBorrowingFee = IVestaParameters(vestaParams)
             .BORROWING_FEE_FLOOR(address(0));
 
-        IBorrowerOperations(borrowerOperations).adjustTrove{value: _deltaColl}(
+        uint256 _etherSend = _increase ? _deltaColl : 0;
+        uint256 _withdrawETH = _increase ? 0 : _deltaColl;
+
+        IBorrowerOperations(borrowerOperations).adjustTrove{value: _etherSend}(
             address(0),
             0,
             _maxBorrowingFee,
-            0,
+            _withdrawETH,
             _deltaDebt,
             _isDebtIncrease,
             _upperHint,
