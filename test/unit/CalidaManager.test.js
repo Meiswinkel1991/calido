@@ -8,7 +8,7 @@ const { networkConfig } = require("../../helper-hardhat-config");
 
 const { network, ethers } = require("hardhat");
 
-desscribe("CalidaManager Unit Test", () => {
+describe("CalidaManager Unit Test", () => {
   async function deployCalidaManagerFixture() {
     const [owner, otherAccount] = await ethers.getSigners();
 
